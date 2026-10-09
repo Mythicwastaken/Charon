@@ -14,9 +14,9 @@
 
 /* --- Configuration & Constants --- */
 #define MAX_SERVICES 15
-#define CONF_FILE    "/etc/myinit.conf"
-#define SOCK_PATH    "/run/myinit.sock"
-#define LOG_FILE     "/var/log/init.log"
+#define CONF_FILE    "/etc/charon.conf"
+#define SOCK_PATH    "/run/charon.sock"
+#define LOG_FILE     "/var/log/charon.log"
 
 // ANSI Colors
 #define CLR_RESET    "\x1b[0m"
@@ -54,7 +54,7 @@ void print_status(const char* task, int success) {
 
 void print_banner() {
     printf(CLR_CYAN CLR_BOLD "\n");
-    printf("  GeminiOS Init Engine v1.0\n");
+    printf("  Charon Init v1.0\n");
     printf("  The parent of all processes...\n");
     printf("  -----------------------------\n\n" CLR_RESET);
 }
@@ -154,7 +154,7 @@ int main() {
         print_status(services[i].path, 1);
     }
 
-    printf("\n" CLR_GREEN "Boot complete. System is live." CLR_RESET "\n");
+    printf("\n" CLR_GREEN "Boot complete." CLR_RESET "\n");
 
     // 4. Main Event Loop
     while (running) {
