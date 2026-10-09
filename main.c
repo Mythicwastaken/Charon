@@ -9,6 +9,7 @@
 #include <sys/reboot.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/stat.h>
 #include <errno.h>
 #include <libgen.h>
 #include <pwd.h>
@@ -62,9 +63,9 @@ void print_status(const char* task, int success) {
 
 void print_banner() {
     printf(CLR_CYAN CLR_BOLD "\n");
-    printf("  Charon Init v1.4 \n");
+    printf("  Charon Init v1.5 (Full Service Manager)\n");
     printf("  The parent of all processes...\n");
-    printf("  --------------------------------\n\n" CLR_RESET);
+    printf("  ---------------------------------------\n\n" CLR_RESET);
 }
 
 /* --- System Management --- */
@@ -200,19 +201,27 @@ void start_service(int idx) {
     log_init(log_msg);
 }
 
-/* --- IPC Command Handler (Daemon Side) --- */
+/* --- IPC Command & Service Manager Handler --- */
 void handle_client_command(int client_fd) {
     char cmd[128] = {0};
     if (recv(client_fd, cmd, sizeof(cmd) - 1, 0) > 0) {
         cmd[strcspn(cmd, "\r\n")] = 0;
 
-        if (strcmp(cmd, "reboot") == 0 || strcmp(cmd, "6") == 0) {
+        char *action_str = strtok(cmd, " ");
+        char *target_service = strtok(NULL, " ");
+
+        if (!action_str) {
+            dprintf(client_fd, "Invalid command\n");
+            return;
+        }
+
+        if (strcmp(action_str, "reboot") == 0 || strcmp(action_str, "6") == 0) {
             dprintf(client_fd, "Rebooting system...\n");
             power_off_sequence(RB_AUTOBOOT);
-        } else if (strcmp(cmd, "poweroff") == 0 || strcmp(cmd, "0") == 0) {
+        } else if (strcmp(action_str, "poweroff") == 0 || strcmp(action_str, "0") == 0) {
             dprintf(client_fd, "Powering off system...\n");
             power_off_sequence(RB_POWER_OFF);
-        } else if (strcmp(cmd, "status") == 0) {
+        } else if (strcmp(action_str, "status") == 0) {
             dprintf(client_fd, "CHARON SERVICE STATUS:\n");
             for (int i = 0; i < service_count; i++) {
                 dprintf(client_fd, "  [%s] PID: %d | User: %s | Action: %s | Path: %s\n",
@@ -222,8 +231,47 @@ void handle_client_command(int client_fd) {
                     services[i].action == RESPAWN ? "respawn" : "once",
                     services[i].path);
             }
+        } else if (target_service) {
+            int found = -1;
+            for (int i = 0; i < service_count; i++) {
+                if (strcmp(services[i].name, target_service) == 0) {
+                    found = i;
+                    break;
+                }
+            }
+
+            if (found == -1) {
+                dprintf(client_fd, "Service '%s' not found.\n", target_service);
+                return;
+            }
+
+            if (strcmp(action_str, "stop") == 0) {
+                if (services[found].pid > 0) {
+                    services[found].action = ONCE; // Prevent auto-respawn
+                    kill(services[found].pid, SIGTERM);
+                    dprintf(client_fd, "Stopping service %s (PID %d)...\n", target_service, services[found].pid);
+                } else {
+                    dprintf(client_fd, "Service %s is not running.\n", target_service);
+                }
+            } else if (strcmp(action_str, "start") == 0) {
+                if (services[found].pid > 0) {
+                    dprintf(client_fd, "Service %s is already running (PID %d).\n", target_service, services[found].pid);
+                } else {
+                    start_service(found);
+                    dprintf(client_fd, "Started service %s (PID %d).\n", target_service, services[found].pid);
+                }
+            } else if (strcmp(action_str, "restart") == 0) {
+                if (services[found].pid > 0) {
+                    kill(services[found].pid, SIGTERM);
+                    usleep(100000);
+                }
+                start_service(found);
+                dprintf(client_fd, "Restarted service %s (New PID %d).\n", target_service, services[found].pid);
+            } else {
+                dprintf(client_fd, "Unknown action: %s\n", action_str);
+            }
         } else {
-            dprintf(client_fd, "Unknown command: %s\n", cmd);
+            dprintf(client_fd, "Unknown or malformed command.\n");
         }
     }
 }
@@ -231,7 +279,7 @@ void handle_client_command(int client_fd) {
 /* --- CLI Mode (charonctl, telinit, init) --- */
 int handle_cli(int argc, char *argv[], const char *prog_name) {
     if (argc < 2 && strcmp(prog_name, "charonctl") == 0) {
-        printf("Usage: charonctl <status|reboot|poweroff>\n");
+        printf("Usage: charonctl <status|reboot|poweroff|start|stop|restart> [service]\n");
         return 1;
     }
 
@@ -254,7 +302,7 @@ int handle_cli(int argc, char *argv[], const char *prog_name) {
     if (strcmp(prog_name, "telinit") == 0 || strcmp(prog_name, "init") == 0) {
         if (argc > 1) strncpy(buffer, argv[1], sizeof(buffer) - 1);
         else {
-            fprintf(stderr, "telinit: missing runlevel argument\n");
+            fprintf(stderr, "%s: missing runlevel argument\n", prog_name);
             close(sock_fd);
             return 1;
         }
@@ -301,6 +349,7 @@ int run_init(int argc, char *argv[]) {
         
         if (bind(global_sock_fd, (struct sockaddr *)&local, sizeof(struct sockaddr_un)) == 0) {
             listen(global_sock_fd, 5);
+            chmod(SOCK_PATH, 0666); // Open socket permissions for unprivileged users
             fcntl(global_sock_fd, F_SETFL, O_NONBLOCK);
             print_status("IPC Control Socket", 1);
         } else {
