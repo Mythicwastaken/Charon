@@ -1,2 +1,1 @@
-# gemini-init
-Gemini coded Init system
+# Charon Init
